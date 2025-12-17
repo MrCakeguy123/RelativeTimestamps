@@ -1,60 +1,248 @@
 /**
  * @name RelativeTimestamps
- * @version 2.1.1
+ * @version 2.1.2
  * @description Shows customizable live timestamps beside Discord messages. Includes settings, error logging, and visual improvements. Settings panel rebuilt for full readability on all themes.
  * @author ChatGPT
  */
 
-const { BdApi } = window;
+/**
+ * Fix for newer BetterDiscord builds:
+ * - BdApi.loadData/saveData may be removed; use BdApi.Data.load/save instead.
+ * - This plugin supports both APIs for backwards compatibility.
+ */
+
+const PLUGIN_NAME = "RelativeTimestamps";
 
 module.exports = class RelativeTimestamps {
   constructor() {
+    // --- Runtime flags ---
+    this.DEBUG = true; // set false if you want less console output
+
+    // --- DOM markers ---
     this.injectedClass = "bd-rel-ts";
     this.markerAttr = "data-rel-ready";
     this.styleId = "bd-rel-ts-style";
+
+    // --- Runtime handles ---
     this.timer = null;
     this.observer = null;
 
+    // --- Settings ---
     this.defaultSettings = {
       detailed: true,
       liveUpdate: true,
       showTooltip: true
     };
 
-    // Ensure all keys exist even after older versions
-    const loaded = BdApi.loadData("RelativeTimestamps", "settings") || {};
-    this.settings = Object.assign({}, this.defaultSettings, loaded);
+    // --- BetterDiscord API (robust) ---
+    this.BdApiRef = this._getBdApi();
+    this.api = this._getBoundApi(this.BdApiRef, PLUGIN_NAME);
+
+    // Load settings safely (never throw in constructor)
+    this.settings = { ...this.defaultSettings };
+    this._loadSettings();
   }
 
-  log(...args) { console.log("[RelativeTimestamps]", ...args); }
-  error(...args) { console.error("[RelativeTimestamps]", ...args); }
+  /* ===========================
+   *  Logging helpers
+   * =========================== */
+  _ts() { return new Date().toISOString(); }
 
+  log(...args) {
+    if (!this.DEBUG) return;
+    console.log(`[${PLUGIN_NAME}]`, ...args);
+  }
+
+  warn(...args) {
+    console.warn(`[${PLUGIN_NAME}]`, ...args);
+  }
+
+  error(...args) {
+    console.error(`[${PLUGIN_NAME}]`, ...args);
+  }
+
+  toast(message, type = "info", timeout = 3000) {
+    try {
+      // Newer BD: api.UI.showToast
+      const ui = this.api?.UI ?? this.BdApiRef?.UI;
+      if (ui?.showToast) return ui.showToast(message, { type, timeout });
+
+      // Older BD: BdApi.showToast
+      const st = this.api?.showToast ?? this.BdApiRef?.showToast;
+      if (typeof st === "function") return st(message, { type, timeout });
+    } catch (e) {
+      this.warn("Toast failed:", e);
+    }
+  }
+
+  /* ===========================
+   *  BetterDiscord API helpers
+   * =========================== */
+  _getBdApi() {
+    // BetterDiscord exposes BdApi on window/globalThis
+    const bd = globalThis.BdApi ?? (typeof window !== "undefined" ? window.BdApi : null);
+    if (!bd) this.warn("BdApi not found. Plugin will run with limited features.");
+    return bd;
+  }
+
+  _getBoundApi(BdApiRef, pluginName) {
+    // Docs: you can create a bound instance via new BdApi("PluginName")
+    // but in some builds BdApi might be an object instead of a constructor.
+    if (!BdApiRef) return null;
+
+    if (typeof BdApiRef === "function") {
+      try {
+        return new BdApiRef(pluginName);
+      } catch (e) {
+        this.warn("Failed to create bound BdApi instance, falling back to global BdApi:", e);
+      }
+    }
+
+    return BdApiRef; // object form / legacy form
+  }
+
+  _dataLoad(pluginName, key) {
+    // Prefer new API: BdApi.Data.load
+    try {
+      const data = this.api?.Data ?? this.BdApiRef?.Data;
+      if (data?.load) {
+        // Bound instances typically accept only (key); unbound accept (pluginName, key)
+        try {
+          return data.load(key);
+        } catch {
+          return data.load(pluginName, key);
+        }
+      }
+    } catch (e) {
+      this.warn("BdApi.Data.load failed:", e);
+    }
+
+    // Fallback old API: BdApi.loadData
+    try {
+      const ld = this.api?.loadData ?? this.BdApiRef?.loadData;
+      if (typeof ld === "function") return ld(pluginName, key);
+    } catch (e) {
+      this.warn("BdApi.loadData failed:", e);
+    }
+
+    // Last-ditch fallback: localStorage (keeps plugin usable even if BD API changes again)
+    try {
+      const raw = localStorage.getItem(`${pluginName}:${key}`);
+      return raw ? JSON.parse(raw) : undefined;
+    } catch (e) {
+      this.warn("localStorage load fallback failed:", e);
+      return undefined;
+    }
+  }
+
+  _dataSave(pluginName, key, value) {
+    // Prefer new API: BdApi.Data.save
+    try {
+      const data = this.api?.Data ?? this.BdApiRef?.Data;
+      if (data?.save) {
+        try {
+          data.save(key, value);
+          return true;
+        } catch {
+          data.save(pluginName, key, value);
+          return true;
+        }
+      }
+    } catch (e) {
+      this.warn("BdApi.Data.save failed:", e);
+    }
+
+    // Fallback old API: BdApi.saveData
+    try {
+      const sd = this.api?.saveData ?? this.BdApiRef?.saveData;
+      if (typeof sd === "function") {
+        sd(pluginName, key, value);
+        return true;
+      }
+    } catch (e) {
+      this.warn("BdApi.saveData failed:", e);
+    }
+
+    // Last-ditch fallback: localStorage
+    try {
+      localStorage.setItem(`${pluginName}:${key}`, JSON.stringify(value));
+      return true;
+    } catch (e) {
+      this.warn("localStorage save fallback failed:", e);
+      return false;
+    }
+  }
+
+  _loadSettings() {
+    try {
+      const loaded = this._dataLoad(PLUGIN_NAME, "settings");
+      const safeObj = (loaded && typeof loaded === "object" && !Array.isArray(loaded)) ? loaded : {};
+      this.settings = Object.assign({}, this.defaultSettings, safeObj);
+      this.log("Settings loaded:", this.settings);
+    } catch (e) {
+      this.error("Settings load failed; using defaults:", e);
+      this.settings = { ...this.defaultSettings };
+    }
+  }
+
+  _saveSettings() {
+    try {
+      const ok = this._dataSave(PLUGIN_NAME, "settings", this.settings);
+      this.log("Settings saved:", ok ? "ok" : "failed", this.settings);
+      return ok;
+    } catch (e) {
+      this.error("Settings save failed:", e);
+      return false;
+    }
+  }
+
+  /* ===========================
+   *  BetterDiscord lifecycle
+   * =========================== */
   start() {
     try {
-      this.log("Starting...");
+      this.log("Starting at", this._ts());
       this.injectCSS();
       this.observe();
       this.processAll();
       if (this.settings.liveUpdate) this.startTimer();
+      this.toast("RelativeTimestamps: enabled", "success", 2500);
       this.log("Plugin started successfully.");
     } catch (e) {
       this.error("Startup failed:", e);
+      this.toast("RelativeTimestamps: failed to start (check console)", "error", 4000);
     }
   }
 
   stop() {
     try {
-      this.log("Stopping...");
+      this.log("Stopping at", this._ts());
+
       if (this.observer) this.observer.disconnect();
-      clearInterval(this.timer);
+      this.observer = null;
+
+      if (this.timer) clearInterval(this.timer);
+      this.timer = null;
+
+      // Remove injected spans
       document.querySelectorAll(`.${this.injectedClass}`).forEach(e => e.remove());
+
+      // Remove marker attr so restart works without needing a full reload
+      document.querySelectorAll(`time[${this.markerAttr}]`).forEach(t => t.removeAttribute(this.markerAttr));
+
+      // Remove injected CSS
       document.getElementById(this.styleId)?.remove();
+
+      this.toast("RelativeTimestamps: disabled", "info", 2000);
       this.log("Stopped cleanly.");
     } catch (e) {
       this.error("Error during stop:", e);
     }
   }
 
+  /* ===========================
+   *  Core logic
+   * =========================== */
   injectCSS() {
     if (document.getElementById(this.styleId)) return;
     const s = document.createElement("style");
@@ -184,26 +372,36 @@ module.exports = class RelativeTimestamps {
       .rel-settings-root * { opacity: 1 !important; }
     `;
     document.head.appendChild(s);
+    this.log("CSS injected.");
   }
 
   startTimer() {
-    clearInterval(this.timer);
+    if (this.timer) clearInterval(this.timer);
     this.timer = setInterval(() => this.refreshAll(), 1000);
+    this.log("Timer started (1s).");
   }
 
   observe() {
     try {
       const root = document.querySelector("#app-mount") || document.body;
       if (!root) return;
+
+      if (this.observer) this.observer.disconnect();
+
       this.observer = new MutationObserver(mutations => {
-        for (const m of mutations) {
-          for (const n of m.addedNodes) {
-            if (!(n instanceof Element)) continue;
-            if (n.matches?.("time")) this.attach(n);
-            else n.querySelectorAll?.("time")?.forEach(t => this.attach(t));
+        try {
+          for (const m of mutations) {
+            for (const n of m.addedNodes) {
+              if (!(n instanceof Element)) continue;
+              if (n.matches?.("time")) this.attach(n);
+              else n.querySelectorAll?.("time")?.forEach(t => this.attach(t));
+            }
           }
+        } catch (e) {
+          this.warn("MutationObserver callback error:", e);
         }
       });
+
       this.observer.observe(root, { childList: true, subtree: true });
       this.log("MutationObserver active.");
     } catch (e) {
@@ -214,6 +412,7 @@ module.exports = class RelativeTimestamps {
   processAll() {
     try {
       document.querySelectorAll("time").forEach(t => this.attach(t));
+      this.log("Initial scan complete.");
     } catch (e) {
       this.error("Processing messages failed:", e);
     }
@@ -221,11 +420,28 @@ module.exports = class RelativeTimestamps {
 
   attach(timeEl) {
     try {
+      if (!(timeEl instanceof Element)) return;
+
+      // If we've already processed this exact <time>, don't do it again
       if (timeEl.hasAttribute(this.markerAttr)) return;
+
+      // Discord uses datetime; some tooltips expose "title"
       const dt = timeEl.getAttribute("datetime") || timeEl.getAttribute("title");
       if (!dt) return;
+
       const date = new Date(dt);
-      if (isNaN(date)) return;
+      if (Number.isNaN(date.getTime())) return;
+
+      // Avoid duplicates: if the next sibling is already our chip, update it instead of inserting
+      const next = timeEl.nextElementSibling;
+      if (next?.classList?.contains(this.injectedClass)) {
+        next.dataset.timestamp = date.toISOString();
+        next.textContent = this.format(date);
+        if (this.settings.showTooltip) next.title = date.toLocaleString();
+        else next.removeAttribute("title");
+        timeEl.setAttribute(this.markerAttr, "true");
+        return;
+      }
 
       const span = document.createElement("span");
       span.className = this.injectedClass;
@@ -233,10 +449,13 @@ module.exports = class RelativeTimestamps {
       span.textContent = this.format(date);
       if (this.settings.showTooltip) span.title = date.toLocaleString();
 
-      timeEl.after(span);
+      // Safer than .after() if Discord changes prototypes (very rare but possible)
+      if (typeof timeEl.after === "function") timeEl.after(span);
+      else timeEl.parentNode?.insertBefore(span, timeEl.nextSibling);
+
       timeEl.setAttribute(this.markerAttr, "true");
     } catch (e) {
-      this.error("Attach failed:", e);
+      this.warn("Attach failed:", e);
     }
   }
 
@@ -249,13 +468,14 @@ module.exports = class RelativeTimestamps {
         el.textContent = this.format(new Date(ts), now);
       });
     } catch (e) {
-      this.error("Refresh failed:", e);
+      this.warn("Refresh failed:", e);
     }
   }
 
   format(date, now = new Date()) {
     let diff = Math.floor((now - date) / 1000);
     if (diff < 0) diff = 0;
+
     const years = Math.floor(diff / 31536000); diff %= 31536000;
     const months = Math.floor(diff / 2592000); diff %= 2592000;
     const days = Math.floor(diff / 86400); diff %= 86400;
@@ -272,17 +492,19 @@ module.exports = class RelativeTimestamps {
       if (minutes) parts.push(`${minutes} minute${minutes !== 1 ? "s" : ""}`);
       if (seconds || !parts.length) parts.push(`${seconds} second${seconds !== 1 ? "s" : ""}`);
       return parts.join(" ") + " ago";
-    } else {
-      if (years) return `${years}y ago`;
-      if (months) return `${months}mo ago`;
-      if (days) return `${days}d ago`;
-      if (hours) return `${hours}h ago`;
-      if (minutes) return `${minutes}m ago`;
-      return `${seconds}s ago`;
     }
+
+    if (years) return `${years}y ago`;
+    if (months) return `${months}mo ago`;
+    if (days) return `${days}d ago`;
+    if (hours) return `${hours}h ago`;
+    if (minutes) return `${minutes}m ago`;
+    return `${seconds}s ago`;
   }
 
-  /* ====== NEW settings panel (theme-proof) ====== */
+  /* ===========================
+   *  Settings panel
+   * =========================== */
   getSettingsPanel() {
     const panel = document.createElement("div");
     panel.className = "rel-settings-root";
@@ -316,23 +538,38 @@ module.exports = class RelativeTimestamps {
       input.type = "checkbox";
       input.checked = !!this.settings[key];
       input.setAttribute("aria-label", title);
-      input.addEventListener("change", () => {
-        this.settings[key] = input.checked;
-        BdApi.saveData("RelativeTimestamps", "settings", this.settings);
 
-        // Apply live effects immediately
-        if (key === "liveUpdate") {
-          clearInterval(this.timer);
-          if (this.settings.liveUpdate) this.startTimer();
+      input.addEventListener("change", () => {
+        try {
+          this.settings[key] = input.checked;
+          this._saveSettings();
+
+          // Apply live effects immediately
+          if (key === "liveUpdate") {
+            if (this.timer) clearInterval(this.timer);
+            this.timer = null;
+            if (this.settings.liveUpdate) this.startTimer();
+          }
+
+          if (key === "showTooltip" || key === "detailed") {
+            // Update existing chips immediately
+            document.querySelectorAll(`.${this.injectedClass}`).forEach(el => {
+              const ts = el.dataset.timestamp;
+              if (!ts) return;
+              const d = new Date(ts);
+              el.textContent = this.format(d);
+              if (this.settings.showTooltip) el.title = d.toLocaleString();
+              else el.removeAttribute("title");
+            });
+          }
+
+          this.log(`Setting changed: ${key} = ${input.checked}`);
+        } catch (e) {
+          this.error("Setting change failed:", e);
         }
-        if (key === "showTooltip" || key === "detailed") {
-          this.refreshAll();
-        }
-        this.log(`Setting changed: ${key} = ${input.checked}`);
       });
 
       controlWrap.appendChild(input);
-
       row.append(textWrap, controlWrap);
       return row;
     };
@@ -368,21 +605,31 @@ module.exports = class RelativeTimestamps {
     resetBtn.className = "rel-btn";
     resetBtn.textContent = "Reset to defaults";
     resetBtn.addEventListener("click", () => {
-      this.settings = { ...this.defaultSettings };
-      BdApi.saveData("RelativeTimestamps", "settings", this.settings);
-      // Re-render the panel to reflect new states
-      const newPanel = this.getSettingsPanel();
-      panel.replaceWith(newPanel);
-      this.refreshAll();
-      clearInterval(this.timer);
-      if (this.settings.liveUpdate) this.startTimer();
+      try {
+        this.settings = { ...this.defaultSettings };
+        this._saveSettings();
+
+        // Re-render the panel to reflect new states
+        const newPanel = this.getSettingsPanel();
+        panel.replaceWith(newPanel);
+
+        this.refreshAll();
+
+        if (this.timer) clearInterval(this.timer);
+        this.timer = null;
+        if (this.settings.liveUpdate) this.startTimer();
+
+        this.toast("RelativeTimestamps: settings reset", "success", 2500);
+      } catch (e) {
+        this.error("Reset failed:", e);
+      }
     });
 
     const testBtn = document.createElement("button");
     testBtn.className = "rel-btn brand";
     testBtn.textContent = "Preview text";
     testBtn.addEventListener("click", () => {
-      BdApi.UI.showToast("Preview: text should be clearly readable on this theme.", {type: "info", timeout: 3000});
+      this.toast("Preview: text should be clearly readable on this theme.", "info", 3000);
     });
 
     actions.append(resetBtn, testBtn);

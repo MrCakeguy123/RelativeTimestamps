@@ -1,17 +1,17 @@
 {
-    "info": {
-        "name": "RelativeTimestamps",
-        "authors": [
-            {
-                "name": "ChatGPT"
-            }
-        ],
-        "version": "2.1.0",
-        "description": "Shows customizable live timestamps beside Discord messages. Includes error logging and improved settings panel UI."
-    },
-    "settings": {
-        "detailed": true,
-        "liveUpdate": true,
-        "showTooltip": true
-    }
+  "info": {
+    "name": "RelativeTimestamps",
+    "authors": [
+      {
+        "name": "ChatGPT"
+      }
+    ],
+    "version": "2.1.2",
+    "description": "Shows customizable live timestamps beside Discord messages. Includes error logging and improved settings panel UI."
+  },
+  "settings": {
+    "detailed": true,
+    "liveUpdate": true,
+    "showTooltip": true
+  }
 }

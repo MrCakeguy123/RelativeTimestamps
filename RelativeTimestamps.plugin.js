@@ -423,7 +423,22 @@ module.exports = class RelativeTimestamps {
       if (!(timeEl instanceof Element)) return;
 
       // If we've already processed this exact <time>, don't do it again
-      if (timeEl.hasAttribute(this.markerAttr)) return;
+      const existingChip = timeEl.nextElementSibling;
+      if (timeEl.hasAttribute(this.markerAttr)) {
+        if (existingChip?.classList?.contains(this.injectedClass)) {
+          const existingTs = existingChip.dataset.timestamp;
+          const existingDate = existingTs ? new Date(existingTs) : null;
+          if (existingDate && !Number.isNaN(existingDate.getTime())) {
+            existingChip.textContent = this.format(existingDate);
+            if (this.settings.showTooltip) existingChip.title = existingDate.toLocaleString();
+            else existingChip.removeAttribute("title");
+            return;
+          }
+        }
+
+        // If marker is set but our chip is missing/stale, clear marker and continue.
+        timeEl.removeAttribute(this.markerAttr);
+      }
 
       // Discord uses datetime; some tooltips expose "title"
       const dt = timeEl.getAttribute("datetime") || timeEl.getAttribute("title");

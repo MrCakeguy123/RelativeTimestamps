@@ -1,7 +1,7 @@
 /**
  * @name RelativeTimestamps
- * @version 2.1.2
- * @description Shows customizable live timestamps beside Discord messages. Includes settings, error logging, and visual improvements. Settings panel rebuilt for full readability on all themes.
+ * @version 2.1.3
+ * @description Shows customizable live timestamps beside Discord messages. Includes compatibility fallbacks, safer timestamp parsing, and theme-friendly settings UI.
  * @author ChatGPT
  */
 
@@ -16,7 +16,7 @@ const PLUGIN_NAME = "RelativeTimestamps";
 module.exports = class RelativeTimestamps {
   constructor() {
     // --- Runtime flags ---
-    this.DEBUG = true; // set false if you want less console output
+    this.DEBUG = false; // set true for troubleshooting
 
     // --- DOM markers ---
     this.injectedClass = "bd-rel-ts";
@@ -444,8 +444,8 @@ module.exports = class RelativeTimestamps {
       const dt = timeEl.getAttribute("datetime") || timeEl.getAttribute("title");
       if (!dt) return;
 
-      const date = new Date(dt);
-      if (Number.isNaN(date.getTime())) return;
+      const date = this._parseTimestamp(dt);
+      if (!date) return;
 
       // Avoid duplicates: if the next sibling is already our chip, update it instead of inserting
       const next = timeEl.nextElementSibling;
@@ -480,7 +480,9 @@ module.exports = class RelativeTimestamps {
       document.querySelectorAll(`.${this.injectedClass}`).forEach(el => {
         const ts = el.dataset.timestamp;
         if (!ts) return;
-        el.textContent = this.format(new Date(ts), now);
+        const d = this._parseTimestamp(ts);
+        if (!d) return;
+        el.textContent = this.format(d, now);
       });
     } catch (e) {
       this.warn("Refresh failed:", e);
@@ -515,6 +517,13 @@ module.exports = class RelativeTimestamps {
     if (hours) return `${hours}h ago`;
     if (minutes) return `${minutes}m ago`;
     return `${seconds}s ago`;
+  }
+
+  _parseTimestamp(value) {
+    if (!value || typeof value !== "string") return null;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    return date;
   }
 
   /* ===========================
@@ -571,7 +580,8 @@ module.exports = class RelativeTimestamps {
             document.querySelectorAll(`.${this.injectedClass}`).forEach(el => {
               const ts = el.dataset.timestamp;
               if (!ts) return;
-              const d = new Date(ts);
+              const d = this._parseTimestamp(ts);
+              if (!d) return;
               el.textContent = this.format(d);
               if (this.settings.showTooltip) el.title = d.toLocaleString();
               else el.removeAttribute("title");

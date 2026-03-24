@@ -6,8 +6,8 @@
         "name": "ChatGPT"
       }
     ],
-    "version": "2.1.2",
-    "description": "Shows customizable live timestamps beside Discord messages. Includes error logging and improved settings panel UI."
+    "version": "2.1.3",
+    "description": "Shows customizable live timestamps beside Discord messages. Includes compatibility fallbacks, safer timestamp parsing, and an improved settings panel UI."
   },
   "settings": {
     "detailed": true,
